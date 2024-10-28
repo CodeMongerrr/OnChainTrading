@@ -1,50 +1,42 @@
 // scripts/interact-with-token.js
 async function main() {
-    try {
-        // Get the signers (your wallet accounts)
-        const [owner, recipient] = await ethers.getSigners();
-        console.log("Interacting using account:", owner.address);
-        
-        // The address where your token is deployed
-        const tokenAddress = "YOUR_DEPLOYED_TOKEN_ADDRESS"; // Replace this with your deployed address
-        
-        // Get the contract interface and attach it to the deployed address
-        const tokenContract = await ethers.getContractAt("TokenX", tokenAddress);
-        
-        // Now we can interact with the token
-        
-        // 1. Check your token balance
-        const myBalance = await tokenContract.balanceOf(owner.address);
-        console.log("\nMy token balance:", ethers.formatUnits(myBalance, 18));
-        
-        // 2. Send tokens to someone
-        const amountToSend = ethers.parseUnits("100", 18); // Sending 100 tokens
-        console.log("\nSending", ethers.formatUnits(amountToSend, 18), "tokens to:", recipient.address);
-        
-        const sendTx = await tokenContract.transfer(recipient.address, amountToSend);
-        console.log("Transaction hash:", sendTx.hash);
-        await sendTx.wait();
-        console.log("Transfer completed!");
-        
-        // 3. Check balances after transfer
-        const newBalance = await tokenContract.balanceOf(owner.address);
-        const recipientBalance = await tokenContract.balanceOf(recipient.address);
-        
-        console.log("\nNew balances:");
-        console.log("My balance:", ethers.formatUnits(newBalance, 18));
-        console.log("Recipient balance:", ethers.formatUnits(recipientBalance, 18));
-        
-        // 4. Mint new tokens (only works if you're the owner)
-        console.log("\nTrying to mint new tokens...");
-        const mintAmount = ethers.parseUnits("1000", 18);
-        const mintTx = await tokenContract.mint(owner.address, mintAmount);
-        await mintTx.wait();
-        console.log("Minted", ethers.formatUnits(mintAmount, 18), "new tokens!");
-        
-    } catch (error) {
-        console.error("\nError:", error.message);
-        // If you get contract-related errors, they'll show up here
-    }
+    const [owner, recipient] = await ethers.getSigners();
+    
+    // Get the deployed token contract
+    const tokenAddress = "0x6aFfCBF27435C6Ad9326d1baD60E14eC373deEC2"; // Replace with your deployed token address
+    const TokenX = await ethers.getContractFactory("TokenX");
+    const token = TokenX.attach(tokenAddress);
+
+    // 1. Check initial balances
+    console.log("\nInitial balances:");
+    const ownerBalance = await token.balanceOf(owner.address);
+    console.log("Owner balance:", ethers.formatUnits(ownerBalance, 18));
+
+    // 2. Transfer tokens
+    const transferAmount = ethers.parseUnits("1000", 18); // Transfer 1000 tokens
+    console.log("\nTransferring", ethers.formatUnits(transferAmount, 18), "tokens to:", recipient.address);
+    
+    const transferTx = await token.transfer(recipient.address, transferAmount);
+    await transferTx.wait();
+    
+    // 3. Check balances after transfer
+    console.log("\nBalances after transfer:");
+    const newOwnerBalance = await token.balanceOf(owner.address);
+    const recipientBalance = await token.balanceOf(recipient.address);
+    console.log("Owner balance:", ethers.formatUnits(newOwnerBalance, 18));
+    console.log("Recipient balance:", ethers.formatUnits(recipientBalance, 18));
+
+    // 4. Mint new tokens
+    const mintAmount = ethers.parseUnits("5000", 18); // Mint 5000 new tokens
+    console.log("\nMinting", ethers.formatUnits(mintAmount, 18), "new tokens to recipient");
+    
+    const mintTx = await token.mint(recipient.address, mintAmount);
+    await mintTx.wait();
+
+    // 5. Final balances
+    console.log("\nFinal balances:");
+    const finalRecipientBalance = await token.balanceOf(recipient.address);
+    console.log("Recipient final balance:", ethers.formatUnits(finalRecipientBalance, 18));
 }
 
 main()
