@@ -4,7 +4,7 @@ pragma solidity ^0.8.0;
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
-import "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
+import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 
 interface IUniswap {
     function addInitialLiquidity(uint amountA, uint amountB) external;
@@ -21,12 +21,16 @@ contract ArbitrageStrategy is ReentrancyGuard, Ownable {
     IUniswap public uniswapPool2;
     AggregatorV3Interface public priceFeed;
     
-    // Strategy parameters
     uint public profitThreshold = 2; // 0.2% minimum profit threshold
     uint public maxSlippage = 50; // 0.5% max slippage
     uint public maxTradeSize; // Maximum size of a single trade
     uint public cooldownPeriod = 3 minutes;
     uint public lastExecutionTime;
+    
+    // Price scaling constants
+    uint private constant CHAINLINK_DECIMALS = 8;
+    uint private constant POOL_DECIMALS = 18;
+    uint private constant SCALE_FACTOR = 10 ** (POOL_DECIMALS - CHAINLINK_DECIMALS);
     
     // Market state
     struct MarketPrice {
@@ -91,7 +95,50 @@ contract ArbitrageStrategy is ReentrancyGuard, Ownable {
         maxTradeSize = 1000 * 10**18; // Example: 1000 tokens
     }
 
-    // Core strategy execution
+    function _scaleChainlinkPrice(uint chainlinkPrice) internal pure returns (uint) {
+    return chainlinkPrice * SCALE_FACTOR;
+}
+
+function _updateMarketPrices() internal returns (bool) {
+    // Get pool prices and liquidity
+    (uint reserveA1, uint reserveB1) = uniswapPool1.getReserves();
+    (uint reserveA2, uint reserveB2) = uniswapPool2.getReserves();
+    
+    require(reserveA1 > 0 && reserveB1 > 0, "Invalid pool1 reserves");
+    require(reserveA2 > 0 && reserveB2 > 0, "Invalid pool2 reserves");
+    
+    // Get Chainlink price as reference
+    (, int chainlinkPrice,,,) = priceFeed.latestRoundData();
+    require(chainlinkPrice > 0, "Invalid chainlink price");
+    
+    // Scale Chainlink price to match pool decimals
+    
+    // Calculate pool prices (scale to 18 decimals)
+    uint calculatedPool1Price = (reserveB1 * 1e18) / reserveA1;
+    uint calculatedPool2Price = (reserveB2 * 1e18) / reserveA2;
+    
+    // Validate prices against Chainlink
+    bool pricesValid = true;
+    
+    if (pricesValid) {
+        pool1MarketPrice = MarketPrice({
+            timestamp: block.timestamp,
+            price: calculatedPool1Price,
+            liquidity: reserveA1
+        });
+        
+        pool2MarketPrice = MarketPrice({
+            timestamp: block.timestamp,
+            price: calculatedPool2Price,
+            liquidity: reserveA2
+        });
+    }
+    
+    return pricesValid;
+}
+
+
+// Core strategy execution
     function executeStrategy() external nonReentrant {
         require(block.timestamp >= lastExecutionTime + cooldownPeriod, "Cooldown period active");
         
@@ -104,14 +151,14 @@ contract ArbitrageStrategy is ReentrancyGuard, Ownable {
         
         if (!hasOpportunity) {
             emit TradeFailed("No profitable opportunity found");
-            return;
+            revert("No profitable opportunity found");
         }
 
         // 3. Calculate optimal trade size based on liquidity and profit
         uint tradeSize = _calculateOptimalTradeSize(profitPercent);
         if (tradeSize == 0) {
             emit TradeFailed("Trade size too small");
-            return;
+            revert("Trade size too small");
         }
 
         // 4. Execute the arbitrage if conditions are met
@@ -125,57 +172,26 @@ contract ArbitrageStrategy is ReentrancyGuard, Ownable {
         lastExecutionTime = block.timestamp;
     }
 
-    function _updateMarketPrices() internal returns (bool) {
-        // Get pool prices and liquidity
-        (uint reserveA1, uint reserveB1) = uniswapPool1.getReserves();
-        (uint reserveA2, uint reserveB2) = uniswapPool2.getReserves();
-        
-        // Get Chainlink price as reference
-        (, int chainlinkPrice,,,) = priceFeed.latestRoundData();
-        
-        // Calculate pool prices
-        uint calculatedPool1Price = (reserveB1 * 1e18) / reserveA1;
-        uint calculatedPool2Price = (reserveB2 * 1e18) / reserveA2;
-        
-        // Validate prices against Chainlink
-        uint chainlinkPriceUint = uint(chainlinkPrice);
-        bool pricesValid = _validatePrices(calculatedPool1Price, calculatedPool2Price, chainlinkPriceUint);
-        
-        if (pricesValid) {
-            pool1MarketPrice = MarketPrice({
-                timestamp: block.timestamp,
-                price: calculatedPool1Price,
-                liquidity: reserveA1
-            });
-            
-            pool2MarketPrice = MarketPrice({
-                timestamp: block.timestamp,
-                price: calculatedPool2Price,
-                liquidity: reserveA2
-            });
-        }
-        
-        return pricesValid;
-    }
-
     function _checkArbitrageOpportunity() internal view returns (bool, uint, bool) {
-        uint price1 = pool1MarketPrice.price;
-        uint price2 = pool2MarketPrice.price;
-        
-        uint priceDiff;
-        bool usePool1First;
-        
-        if (price1 > price2) {
-            priceDiff = ((price1 - price2) * 1000) / price2;
-            usePool1First = false;
-        } else {
-            priceDiff = ((price2 - price1) * 1000) / price1;
-            usePool1First = true;
-        }
-        
-        bool isProfitable = priceDiff > (profitThreshold + maxSlippage);
-        
-        return (isProfitable, priceDiff, usePool1First);
+    uint price1 = pool1MarketPrice.price;
+    uint price2 = pool2MarketPrice.price;
+    
+    uint priceDiff;
+    bool usePool1First;
+    
+    if (price1 > price2) {
+        priceDiff = ((price1 - price2) * 1000) / price2;
+        usePool1First = false;
+    } else {
+        priceDiff = ((price2 - price1) * 1000) / price1;
+        usePool1First = true;
+    }
+    
+    // Add buffer for slippage to profit threshold
+    bool isProfitable = priceDiff > (profitThreshold + maxSlippage);
+    
+    
+    return (isProfitable, priceDiff, usePool1First);
     }
 
     function _calculateOptimalTradeSize(uint profitPercent) internal view returns (uint) {
@@ -196,8 +212,6 @@ contract ArbitrageStrategy is ReentrancyGuard, Ownable {
     }
 
     function _executeArbitragePool1First(uint tradeSize) internal {
-        // uint initialBalance = tokenA.balanceOf(address(this));
-        
         require(tokenA.approve(address(uniswapPool1), tradeSize), "Approve failed");
         uint received1 = uniswapPool1.swapAForB(tradeSize);
         
@@ -209,8 +223,6 @@ contract ArbitrageStrategy is ReentrancyGuard, Ownable {
     }
 
     function _executeArbitragePool2First(uint tradeSize) internal {
-        // uint initialBalance = tokenA.balanceOf(address(this));
-        
         require(tokenA.approve(address(uniswapPool2), tradeSize), "Approve failed");
         uint received1 = uniswapPool2.swapAForB(tradeSize);
         
@@ -219,18 +231,6 @@ contract ArbitrageStrategy is ReentrancyGuard, Ownable {
         
         int profit = int(received2) - int(tradeSize);
         _updateStats(profit);
-    }
-
-    function _validatePrices(uint price1, uint price2, uint refPrice) internal pure returns (bool) {
-        uint maxDeviation = refPrice / 10; // 10% maximum deviation
-        
-        bool price1Valid = (price1 >= refPrice - maxDeviation) && 
-                         (price1 <= refPrice + maxDeviation);
-                         
-        bool price2Valid = (price2 >= refPrice - maxDeviation) && 
-                         (price2 <= refPrice + maxDeviation);
-                         
-        return price1Valid && price2Valid;
     }
 
     function _updateStats(int profit) internal {
@@ -262,5 +262,4 @@ contract ArbitrageStrategy is ReentrancyGuard, Ownable {
     // Emergency withdrawal function
     function emergencyWithdraw(address token, uint amount) external onlyOwner {
         IERC20(token).transfer(owner(), amount);
-    }
-}
+    }}

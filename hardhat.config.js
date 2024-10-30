@@ -22,6 +22,7 @@ module.exports = {
         },
         sepolia:{
             url: process.env.SEPOLIA_URL || "",
+            timeout: 60000, // 60 seconds
             accounts: process.env.PRIVATE_KEY !== undefined ? [process.env.PRIVATE_KEY] : []
         }
     },
